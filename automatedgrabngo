@@ -1,5 +1,5 @@
 #include <Servo.h>
-#include <VL53L0X.h>
+#include <IRremote.h>
 
 const int PIN_Motor_PWMA = 5;
 const int PIN_Motor_PWMB = 6;
@@ -11,37 +11,67 @@ const int IRmid = A1;
 const int IRleft = A2;
 const int lIR = A8;
 const int rIR = A10;
-#define TRIG_PIN 13
-#define ECHO_PIN 12
+#define TRIG1 13
+#define ECHO1 12
+#define TRIG2 43
+#define ECHO2 45
+#define RECV 9
+#define remote1 16738455
+#define remote2 16750695
+#define remote3 16756815
+#define remote4 16724175
+#define remote5 16718055
+#define remote6 16743045
 int curLine = 0;
-bool incrementable = true;
+int stations = 6;
+int speed = 120;
+int targetLine = 0;
+int dropoff = 0;
+int armstart = 165;
+int topstart = 175;
+
+bool incrementable = false;
 bool grabbed = false;
-bool arrived = true;
+bool arrived = false;
+bool turned = false;
 
 
 Servo claw;
 Servo arm;
-VL53L0X lidar;
+Servo top;
+IRrecv irrecv(RECV); //  Create an infrared receive drive object
+decode_results results;  //  Create decoding object
 
 void setup() {
+  Serial.begin(9600);
+  irrecv.enableIRIn();
+  targetLine = 0;
+  dropoff = -1;
+  while (targetLine == 0){targetLine = receiveIRInput();}
+  Serial.println(targetLine);
+  delay(500);
+  while (dropoff == -1){dropoff = receiveIRInput() - 1;}
+  Serial.println(dropoff);
+  Serial.println("Initializing");
   pinMode(IRright, INPUT);
   pinMode(IRmid, INPUT);
   pinMode(IRleft, INPUT);
-  lidar.init();
-  Serial.begin(9600);
-  claw.attach(44);
+  claw.attach(10);
   claw.write(0);
-  arm.attach(38);
-  arm.write(0);
+  arm.attach(11);
+  arm.write(armstart);
+  top.attach(39);
+  top.write(topstart);
   pinMode(PIN_Motor_PWMA, OUTPUT);
   pinMode(PIN_Motor_PWMB, OUTPUT);
   pinMode(PIN_Motor_AIN_1, OUTPUT);
   pinMode(PIN_Motor_BIN_1, OUTPUT);
   pinMode(PIN_Motor_STBY, OUTPUT);
-  pinMode(TRIG_PIN, OUTPUT);
-  pinMode(ECHO_PIN, INPUT);
+  pinMode(TRIG1, OUTPUT);
+  pinMode(ECHO1, INPUT);
+  pinMode(TRIG2, OUTPUT);
+  pinMode(ECHO2, INPUT);
 }
-
 
 void loop() {
   int IRr = analogRead(IRright);
@@ -49,161 +79,379 @@ void loop() {
   int IRl = analogRead(IRleft);
   int leftIR = analogRead(lIR);
   int rightIR = analogRead(rIR);
-  int prevLine = 500;
-  int targetLine = 5;
+  int US = 40;
   
-  //Serial.println(USTest());
-  if (USTest() < 8 && USTest() > 2 && !grabbed && arrived)
-  {
-    //stopAndGrab();
-    grabbed = true;
-  }
-  
-  else 
-  {
-    //Serial.println(leftIR);
-    if (leftIR > 700 && incrementable) 
+  if (leftIR > 200 && incrementable) 
   {
     Serial.println("incrementing");
     Serial.println(leftIR);
     curLine++;
     curLine++;
-    if (curLine >= targetLine)
+    if (curLine >= targetLine && !turned)
     {
-      if (targetLine % 2 == 1) turnLeft();
-      else turnRight();
-      delay(4000);
+      if (targetLine % 2 == 1) {
+        turnLeft();
+        //delay(100);
+        }
+      else {
+        turnRight();
+        //delay(100);
+        }
+      goStraight();
+      turned = true;
+      int ram = 0;
+      int end = (targetLine % 2 == 0) ? 20000/speed : 15000/speed;
+      while (ram < end){
+        lineFollowing(analogRead(A2), 0, analogRead(A0));
+        delay(10);
+        ram++;
+      }
+      //adjustRight();
+      //delay(500);
+      quickPickup();
+      while (analogRead(lIR) < 150){
+        goBack();
+        delay(900/speed);
+      }
+      goStraight();
+      delay(18000/speed);
+      stop();
+      if (targetLine % 2 == 1) turnRight();
+      else turnLeft();
+      //delay(100);
+      
     }
-    Serial.println(curLine);
-    incrementable = false;//turnLeft();
-    //Serial.println(incrementable);
+    incrementable = false;
   }
-    if (IRr < 700) adjustLeft();
-    else if (IRl < 700) adjustRight();
-    else goStraight();
+  if (turned && curLine >= stations) {
+    dropOff(dropoff);
+    arm.write(armstart);
+    top.write(topstart);
   }
-  incrementable = (leftIR < 500);
-  //Serial.println(incrementable);
+  lineFollowing(analogRead(A2), 0, analogRead(A0));
+  if (!incrementable) incrementable = (leftIR < 100);
 }
 
-/*void hold
-{
-  int IR = analogRead(IRsensor);
-  Serial.println("hi");
-  Serial.println(IR);
-  if (IR > 900)
-  {
-    Serial.println(IR);
-    claw.write(0);
-    delay(2000);
-    claw.write(180);
-    delay(700);
-  }
-  delay(100);
-}*/
+void lineFollowing(int midLeft, int US, int midRight){
+  if (US > 0 && US < 12) stop();
+  else if (midRight < 600) adjustLeft();
+  else if (midLeft < 600) adjustRight();
+  else goStraight();
+}
 
 void adjustRight()
 {
-  analogWrite(PIN_Motor_PWMA, 75);
-  analogWrite(PIN_Motor_PWMB, 50);
-  digitalWrite(PIN_Motor_AIN_1, HIGH); // reverses right hand wheels when off
-  digitalWrite(PIN_Motor_BIN_1, HIGH); // reverses left hand wheels when off
-  digitalWrite(PIN_Motor_STBY, HIGH); // disables all when off
-}
-
-void adjustLeft()
-{
-  analogWrite(PIN_Motor_PWMA, 50);
-  analogWrite(PIN_Motor_PWMB, 75);
-  digitalWrite(PIN_Motor_AIN_1, HIGH); // reverses right hand wheels when off
-  digitalWrite(PIN_Motor_BIN_1, HIGH); // reverses left hand wheels when off
-  digitalWrite(PIN_Motor_STBY, HIGH); // disables all when off
-}
-
-void goStraight()
-{
-  analogWrite(PIN_Motor_PWMA, 75);
-  analogWrite(PIN_Motor_PWMB, 75);
-  digitalWrite(PIN_Motor_AIN_1, HIGH); // reverses right hand wheels when off
-  digitalWrite(PIN_Motor_BIN_1, HIGH); // reverses left hand wheels when off
-  digitalWrite(PIN_Motor_STBY, HIGH); // disables all when off
-}
-
-void turnLeft()
-{
-  
-  analogWrite(PIN_Motor_PWMA, 75);
-  analogWrite(PIN_Motor_PWMB, 75);
-  digitalWrite(PIN_Motor_AIN_1, HIGH); // reverses right hand wheels when off
-  digitalWrite(PIN_Motor_BIN_1, LOW); // reverses left hand wheels when off
-  digitalWrite(PIN_Motor_STBY, HIGH); // disables all when off
-}
-
-void turnRight()
-{
-  
-  analogWrite(PIN_Motor_PWMA, 75);
-  analogWrite(PIN_Motor_PWMB, 75);
+  //Serial.println("adjusting right");
+  analogWrite(PIN_Motor_PWMA, speed);
+  analogWrite(PIN_Motor_PWMB, speed);
   digitalWrite(PIN_Motor_AIN_1, LOW); // reverses right hand wheels when off
   digitalWrite(PIN_Motor_BIN_1, HIGH); // reverses left hand wheels when off
   digitalWrite(PIN_Motor_STBY, HIGH); // disables all when off
 }
 
-long USTest()
-{
-  long duration, distance;
-  
-  // Clear the TRIG_PIN by setting it LOW
-  digitalWrite(TRIG_PIN, LOW);
-  delayMicroseconds(200);
-  
-  // Trigger the sensor by setting the TRIG_PIN HIGH for 10 microseconds
-  digitalWrite(TRIG_PIN, HIGH);
-  delayMicroseconds(1000);
-  digitalWrite(TRIG_PIN, LOW);
-  
-  // Read the signal from the sensor: a HIGH pulse whose
-  // duration is the time (in microseconds) from the sending
-  // of the ping to the reception of its echo off of an object
-  distance = pulseIn(ECHO_PIN, HIGH)/60;
-  //Serial.println("Distance: ");
-  //Serial.println(distance);
-  
-  delay(100);
-  return distance;
 
+void adjustLeft()
+{
+  //Serial.println("adjusting left");
+  analogWrite(PIN_Motor_PWMA, speed);
+  analogWrite(PIN_Motor_PWMB, speed);
+  digitalWrite(PIN_Motor_AIN_1, HIGH); // reverses right hand wheels when off
+  digitalWrite(PIN_Motor_BIN_1, LOW); // reverses left hand wheels when off
+  digitalWrite(PIN_Motor_STBY, HIGH); // disables all when off
 }
 
-int readLidar(VL53L0X lidar)
+void goStraight()
 {
-  int reading = lidar.readRangeSingleMillimeters();
-  //Serial.println(reading);
-  return reading;
+  //Serial.println("straight");  
+  analogWrite(PIN_Motor_PWMA, speed);
+  analogWrite(PIN_Motor_PWMB, speed);
+  digitalWrite(PIN_Motor_AIN_1, HIGH); // reverses right hand wheels when off
+  digitalWrite(PIN_Motor_BIN_1, HIGH); // reverses left hand wheels when off
+  digitalWrite(PIN_Motor_STBY, HIGH); // disables all when off
 }
 
-void stopAndGrab()
+void goBack()
 {
+  analogWrite(PIN_Motor_PWMA, speed);
+  analogWrite(PIN_Motor_PWMB, speed);
+  digitalWrite(PIN_Motor_AIN_1, LOW); // reverses right hand wheels when off
+  digitalWrite(PIN_Motor_BIN_1, LOW); // reverses left hand wheels when off
+  digitalWrite(PIN_Motor_STBY, HIGH); // disables all when off 
+}
 
+void turnLeft()
+{
+  Serial.println("turning left");
   stop();
-  int i = 0; 
-  while (readLidar(lidar) > 60)
-  {
-    //Serial.println(lidar.readRangeSingleMillimeters());
-    arm.write(5*i);
-    
-    delay(300);
-    i++;
+  adjustLeft();
+  delay(35000/speed);
+  while (analogRead(A0) > 500){
+  adjustLeft();
+  delay(100);
   }
-  grab();
+  delay(100);
+  stop();
+  int l = analogRead(A2);
+  int r = analogRead(A0);
+  while (l < 500 && r < 500) {
+    adjustLeft();
+    delay(100);
+    l = analogRead(A2);
+    r = analogRead(A0);
+    Serial.println(l);
+    Serial.println(r);
+  }
+  delay(100);
+  stop();
+  Serial.println("finished turning left");
 }
 
-void stop()
+void turnRight()
 {
-  digitalWrite(PIN_Motor_STBY, LOW); // disables all when off
+  Serial.println("turning right");
+  stop();
+  adjustRight();
+  delay(35000/speed);
+  while (analogRead(A0) > 500){
+  adjustRight();
+  delay(200);
+  }
+  delay(200);
+  stop();
+  int l = analogRead(A2);
+  int r = analogRead(A0);
+  while (r < 500 && l < 500) {
+    adjustRight();
+    delay(100);
+    l = analogRead(A2);
+    r = analogRead(A0);
+    Serial.println(l);
+    Serial.println(r);
+  }
+  delay(100);
+  stop();
+  Serial.println("finished turning right");
 }
 
-void grab()
+void turnAround(){
+  turnLeft();
+  turnLeft();
+  stop();
+}
+
+int USTest()
 {
-  claw.write(180);
-  delay(1500);
+  int duration, distance;
+  digitalWrite(TRIG1, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG1, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG1, LOW);
+  distance = pulseIn(ECHO1, HIGH)/60;
+  return distance;
+}
+
+int USTest2()
+{
+  int duration, distance;
+  digitalWrite(TRIG2, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG2, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG2, LOW);
+  distance = pulseIn(ECHO2, HIGH)/60;
+  return distance;
+}
+
+void drop(){
+  int k = 0;
+  while(k < 70){
+    if (topstart - 2*k < 180 && topstart - 2*k > 0) top.write(topstart - 2*k);
+    delay(100);
+    if (armstart - 2*k < 180 && armstart - 2*k > 0) arm.write(armstart - 2*k);
+    delay(100);
+    k++;
+  }
+  delay(200);
+  claw.write(0);
+  delay(2000);
+  arm.write(armstart);
+  top.write(topstart);
+  delay(2000);
+}
+
+void dropOff(int target){
+  Serial.println("dropping off");
+  int cur = -1;
+  bool arrived = false;
+  bool inc = false;
+  bool turned = false;
+  while (!arrived){
+    lineFollowing(analogRead(A2), USTest(), analogRead(A0));
+    if (inc && (analogRead(lIR) >  200 || analogRead(rIR) > 200)) {
+      Serial.println("incrementing dropoff");
+      cur++;
+      Serial.println("curline:");
+      Serial.println(cur);
+      inc = false;
+    }
+    if (cur >= target){
+      if (target == 0){
+        stop();
+        goBack();
+        delay(20000/speed);
+        stop();
+        quickDrop();
+        goStraight();
+        delay(20000/speed);
+        turnLeft();
+        int q = 0;
+        while (q < 100){
+          lineFollowing(analogRead(A2), USTest(), analogRead(A0));
+        }
+      }
+      else{
+        turnRight();
+        stop();
+        while (analogRead(A2) > 150 || analogRead(A1) > 150 || analogRead(A0) > 150) {lineFollowing(analogRead(A2), 0, analogRead(A0));}
+        goBack();
+        delay(45000/speed);
+        stop();
+        quickDrop();
+        goStraight();
+        delay(20000/speed);
+        turnLeft();
+        int q = 0;
+        while (q < 100){
+          lineFollowing(analogRead(A2), USTest(), analogRead(A0));
+        }
+      }
+    }
+    if (!turned && target > 0 && cur > -1 ) {
+      turnLeft();
+      turned = true;
+    }
+    if (!inc) inc = (analogRead(rIR) < 200 && analogRead(lIR) < 200);
+  }
+}
+
+void stop(){
+  analogWrite(PIN_Motor_PWMA, speed);
+  analogWrite(PIN_Motor_PWMB, speed);
+  digitalWrite(PIN_Motor_AIN_1, HIGH); // reverses right hand wheels when off
+  digitalWrite(PIN_Motor_BIN_1, HIGH); // reverses left hand wheels when off
+  digitalWrite(PIN_Motor_STBY, LOW);                                                            
+}
+
+int receiveIRInput() {
+  while (true) { // Continue looping until a valid IR signal is received
+    if (irrecv.decode(&results)) {
+      unsigned long codeValue = results.value;
+      Serial.println(codeValue);
+      irrecv.resume(); // Receive the next value
+      switch(codeValue) {
+      case remote1: return 1;
+      case remote2: return 2;
+      case remote3: return 3;
+      case remote4: return 4;
+      case remote5: return 5;
+      case remote6: return 6;
+      default: return 0; // Unknown code received
+  }
+    }
+  }
+}
+
+void pickup(){
+  stop();
+      //delay(1000);
+      int j = 0;
+      int boxdist = USTest2();
+      Serial.println(USTest2());
+      while((boxdist > 2 || j < 28) && j < 70){
+        if (armstart - 2*j < 180 && armstart - 2*j > 0) arm.write(armstart - 2*j);
+        delay(200);
+        if (topstart - 2*j < 180 && topstart - 2*j > 0) top.write(topstart - 2*j);
+        delay(200);
+        boxdist = USTest2();
+        Serial.println(boxdist);
+        j++;
+      }
+      j++;
+        arm.write(armstart - 2*j);
+        top.write(topstart - 2*j);
+        delay(200);
+      claw.write(110);
+      delay(1000);
+      while(j >= 0){
+        arm.write(armstart - 2*j);
+        top.write(topstart - 2*j);
+        delay(100);
+        j--;
+      }
+}
+
+void quickDrop(){
+  int k = 0;
+  int steps = 14;
+  int stepsize = 140 / steps;
+  
+  //arm.write(armstart - 140);
+  //top.write(topstart - 140);
+  //delay(500);
+  while(k < steps){
+    if (armstart - stepsize*k < 180 && armstart - stepsize*k > 0) arm.write(armstart - stepsize*k);
+    if (topstart - stepsize*k < 180 && topstart - stepsize*k > 0) top.write(topstart - stepsize*k);
+    delay(200);
+    k++;
+  }
+  claw.write(0);
+  delay(500);
+  arm.write(armstart);
+  top.write(topstart);
+  delay(200);
+}
+
+void quickPickup(){
+  stop();
+      //delay(1000);
+      int j = 24;
+      arm.write(armstart - 2*j);
+      top.write(topstart - 2*j);
+      delay(500);
+      int boxdist = USTest2();
+      Serial.println(USTest2());
+      while((boxdist > 2 || j < 28) && j < 70){
+        if (armstart - 2*j < 180 && armstart - 2*j > 0) arm.write(armstart - 2*j);
+        delay(200);
+        if (topstart - 2*j < 180 && topstart - 2*j > 0) top.write(topstart - 2*j);
+        delay(200);
+        boxdist = USTest2();
+        Serial.println(boxdist);
+        j++;
+      }
+      j += 4;
+        arm.write(armstart - 2*j);
+        top.write(topstart - 2*j);
+        delay(100);
+      claw.write(110);
+      delay(1000);
+      while(j >= 0){
+        arm.write(armstart - 2*j);
+        top.write(topstart - 2*j);
+        delay(100);
+        j--;
+      }
+}
+
+void instaDrop(){
+  int k = 0;
+  arm.write(armstart - 140);
+  top.write(topstart - 140);
+  delay(1000);
+  claw.write(0);
+  delay(1000);
+  arm.write(armstart);
+  top.write(topstart);
+  delay(1000);
 }
